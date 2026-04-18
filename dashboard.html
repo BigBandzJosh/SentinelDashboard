@@ -1,0 +1,1323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SENTINEL — Personal Intelligence Terminal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@300;400;500;600;700&family=Exo+2:wght@200;300;400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+<style>
+/* ═══════════════════════════════════════════════════════
+   DESIGN LANGUAGE: Cold War Ops Room meets SIGINT terminal
+   Palette: near-black bg, amber primary, ice-blue accents
+   Font: Rajdhani (headers) + Share Tech Mono (data)
+═══════════════════════════════════════════════════════ */
+:root {
+  --bg:          #080b0f;
+  --bg2:         #0d1117;
+  --bg3:         #111820;
+  --border:      #1e2d3d;
+  --border2:     #2a3f52;
+  --amber:       #e8a020;
+  --amber-dim:   #7a540f;
+  --amber-glow:  rgba(232,160,32,0.15);
+  --ice:         #7ecfea;
+  --ice-dim:     #2a5f72;
+  --ice-glow:    rgba(126,207,234,0.12);
+  --red:         #e84040;
+  --red-dim:     #5a1010;
+  --green:       #3ddc84;
+  --green-dim:   #0e4020;
+  --orange:      #f97316;
+  --purple:      #a855f7;
+  --text:        #c8d8e8;
+  --text-dim:    #4a6070;
+  --text-muted:  #7a9aaa;
+  --panel-bg:    rgba(13,17,23,0.95);
+  --scan-speed:  3s;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font-family: 'Rajdhani', sans-serif; }
+
+/* ── Scanline overlay ── */
+body::before {
+  content: '';
+  position: fixed; inset: 0; z-index: 9999; pointer-events: none;
+  background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px);
+}
+body::after {
+  content: '';
+  position: fixed; inset: 0; z-index: 9998; pointer-events: none;
+  background: radial-gradient(ellipse at center, transparent 60%, rgba(0,0,0,0.4) 100%);
+}
+
+/* ── Noise texture on panels ── */
+@keyframes flicker { 0%,100%{opacity:1} 92%{opacity:0.97} 93%{opacity:1} 97%{opacity:0.99} }
+
+/* ════════════════════ LAYOUT ════════════════════ */
+#app {
+  display: grid;
+  grid-template-rows: 48px 1fr 28px;
+  grid-template-columns: 300px 1fr 300px;
+  height: 100vh;
+  gap: 0;
+}
+
+/* ── Header bar ── */
+#header {
+  grid-column: 1 / -1;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 16px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  position: relative;
+  z-index: 100;
+}
+#header::after {
+  content: '';
+  position: absolute; bottom: -1px; left: 0; right: 0; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--amber), var(--ice), transparent);
+  opacity: 0.4;
+}
+
+.logo {
+  font-family: 'Rajdhani', sans-serif;
+  font-weight: 700;
+  font-size: 22px;
+  letter-spacing: 6px;
+  color: var(--amber);
+  text-shadow: 0 0 20px var(--amber-dim);
+}
+.logo span { color: var(--ice); }
+
+.header-center {
+  display: flex; align-items: center; gap: 24px;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.status-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 8px var(--green);
+  animation: pulse 2s ease-in-out infinite;
+  display: inline-block; margin-right: 6px;
+}
+.status-dot.warning { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
+.status-dot.error   { background: var(--red);   box-shadow: 0 0 8px var(--red); }
+
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+.header-right {
+  display: flex; align-items: center; gap: 16px;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 10px;
+}
+#clock { color: var(--ice); font-size: 13px; letter-spacing: 2px; }
+#sweep-btn {
+  padding: 4px 12px;
+  background: transparent;
+  border: 1px solid var(--amber-dim);
+  color: var(--amber);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 2px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+#sweep-btn:hover { background: var(--amber-glow); border-color: var(--amber); }
+#sweep-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ── Left panel ── */
+#left-panel {
+  grid-row: 2;
+  grid-column: 1;
+  background: var(--panel-bg);
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  z-index: 10;
+}
+
+/* ── Map area ── */
+#map-container {
+  grid-row: 2;
+  grid-column: 2;
+  position: relative;
+  background: #04080c;
+}
+#map { width: 100%; height: 100%; }
+
+/* ── Right panel ── */
+#right-panel {
+  grid-row: 2;
+  grid-column: 3;
+  background: var(--panel-bg);
+  border-left: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  z-index: 10;
+}
+
+/* ── Footer ── */
+#footer {
+  grid-column: 1 / -1;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 16px;
+  background: var(--bg2);
+  border-top: 1px solid var(--border);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 9px;
+  color: var(--text-dim);
+}
+.footer-tickers { display: flex; gap: 20px; overflow: hidden; flex: 1; }
+.ticker-item { white-space: nowrap; }
+.ticker-item .val { color: var(--text); }
+.ticker-item .up  { color: var(--green); }
+.ticker-item .dn  { color: var(--red); }
+
+/* ════════════════════ PANELS ════════════════════ */
+.panel-section {
+  border-bottom: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  min-height: 0;
+}
+.panel-section.flex-grow { flex: 1; overflow: hidden; }
+
+.panel-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 12px;
+  background: rgba(30,45,61,0.4);
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  user-select: none;
+  flex-shrink: 0;
+}
+.panel-header:hover { background: rgba(30,45,61,0.7); }
+
+.panel-title {
+  font-family: 'Rajdhani', sans-serif;
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: var(--amber);
+}
+.panel-badge {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 9px;
+  color: var(--text-dim);
+  background: rgba(0,0,0,0.4);
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+}
+.panel-badge.alert { color: var(--red); border-color: var(--red-dim); }
+
+.panel-body {
+  overflow-y: auto;
+  flex: 1;
+  padding: 0;
+}
+.panel-body::-webkit-scrollbar { width: 3px; }
+.panel-body::-webkit-scrollbar-track { background: transparent; }
+.panel-body::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+/* ── Event row ── */
+.event-row {
+  padding: 7px 12px;
+  border-bottom: 1px solid rgba(30,45,61,0.5);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.event-row:hover { background: rgba(126,207,234,0.05); }
+.event-row .ev-title {
+  font-size: 11px;
+  color: var(--text);
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.event-row .ev-meta {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 9px;
+  color: var(--text-dim);
+  margin-top: 2px;
+  display: flex; gap: 8px;
+}
+.ev-tone-neg { color: var(--red) !important; }
+.ev-tone-pos { color: var(--green) !important; }
+
+/* ── Source health ── */
+.source-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 5px 12px;
+  border-bottom: 1px solid rgba(30,45,61,0.3);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 9px;
+}
+.source-name { color: var(--text-muted); }
+.source-count { color: var(--ice); }
+.source-ok   { color: var(--green); }
+.source-err  { color: var(--red); }
+.source-warn { color: var(--amber); }
+
+/* ── Market rows ── */
+.market-group-label {
+  padding: 6px 12px 3px;
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 9px;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  background: rgba(0,0,0,0.2);
+}
+.market-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 4px 12px;
+  border-bottom: 1px solid rgba(30,45,61,0.3);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 10px;
+}
+.m-label { color: var(--text-muted); flex: 1; }
+.m-price { color: var(--text); }
+.m-chg   { font-size: 9px; min-width: 52px; text-align: right; }
+.m-up    { color: var(--green); }
+.m-dn    { color: var(--red); }
+
+/* ── Risk gauge ── */
+.risk-gauge {
+  padding: 10px 12px;
+  display: flex; align-items: center; gap: 10px;
+}
+.risk-label { font-family: 'Share Tech Mono', monospace; font-size: 9px; color: var(--text-dim); }
+.risk-bar-wrap { flex: 1; height: 4px; background: var(--bg); border: 1px solid var(--border); border-radius: 2px; }
+.risk-bar { height: 100%; border-radius: 2px; transition: width 0.8s ease; }
+.risk-LOW      .risk-bar { background: var(--green); }
+.risk-MODERATE .risk-bar { background: var(--ice); }
+.risk-ELEVATED .risk-bar { background: var(--amber); }
+.risk-HIGH     .risk-bar { background: var(--red); box-shadow: 0 0 8px var(--red); }
+.risk-val { font-family: 'Share Tech Mono', monospace; font-size: 11px; color: var(--amber); min-width: 32px; text-align: right; }
+
+/* ── Delta panel ── */
+.delta-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 4px 12px;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 9px;
+  border-bottom: 1px solid rgba(30,45,61,0.2);
+}
+.delta-key   { color: var(--text-muted); }
+.delta-chg   { }
+.delta-up    { color: var(--red); }   /* more events = bad */
+.delta-dn    { color: var(--green); }
+.delta-same  { color: var(--text-dim); }
+
+/* ── Satellite rows ── */
+.sat-row {
+  display: flex; justify-content: space-between;
+  padding: 4px 12px;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 9px;
+  border-bottom: 1px solid rgba(30,45,61,0.2);
+}
+.sat-name  { color: var(--text-muted); }
+.sat-count { color: var(--ice); }
+.sat-type-military { color: var(--amber); }
+
+/* ── Relief rows ── */
+.relief-row {
+  padding: 7px 12px;
+  border-bottom: 1px solid rgba(30,45,61,0.4);
+}
+.relief-name { font-size: 11px; color: var(--text); }
+.relief-meta { font-family: 'Share Tech Mono', monospace; font-size: 9px; color: var(--text-dim); margin-top: 2px; }
+.relief-alert  { color: var(--red); }
+.relief-ongoing { color: var(--amber); }
+
+/* ── Map layer toggles ── */
+#layer-toggles {
+  position: absolute;
+  top: 10px; right: 10px;
+  z-index: 500;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.layer-btn {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 10px;
+  background: rgba(8,11,15,0.9);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 1px;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+.layer-btn:hover  { border-color: var(--border2); color: var(--text); }
+.layer-btn.active { border-color: var(--amber-dim); color: var(--amber); background: var(--amber-glow); }
+.layer-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+}
+
+/* ── Region filters ── */
+#region-filters {
+  position: absolute;
+  bottom: 10px; right: 10px;
+  z-index: 500;
+  display: flex; gap: 3px;
+}
+.region-btn {
+  padding: 4px 8px;
+  background: rgba(8,11,15,0.9);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 8px;
+  letter-spacing: 1px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.region-btn:hover  { border-color: var(--border2); color: var(--text); }
+.region-btn.active { border-color: var(--ice-dim); color: var(--ice); background: var(--ice-glow); }
+
+/* ── Map info box ── */
+#map-info {
+  position: absolute;
+  bottom: 10px; left: 10px;
+  z-index: 500;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 9px;
+  color: var(--text-dim);
+  background: rgba(8,11,15,0.85);
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  max-width: 300px;
+}
+
+/* ── Sweep progress ── */
+#sweep-progress {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px; z-index: 600;
+  overflow: hidden;
+  display: none;
+}
+#sweep-progress.active { display: block; }
+#sweep-bar {
+  height: 100%;
+  background: linear-gradient(90deg, var(--amber), var(--ice), var(--amber));
+  background-size: 200% 100%;
+  animation: sweep-scan 1.2s linear infinite;
+}
+@keyframes sweep-scan { 0%{background-position:0% 0%} 100%{background-position:200% 0%} }
+
+/* ── Tooltips / popups ── */
+.leaflet-popup-content-wrapper {
+  background: rgba(13,17,23,0.97) !important;
+  border: 1px solid var(--border2) !important;
+  border-radius: 0 !important;
+  color: var(--text) !important;
+  font-family: 'Share Tech Mono', monospace !important;
+  font-size: 10px !important;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.6) !important;
+}
+.leaflet-popup-tip { background: var(--bg3) !important; }
+.leaflet-popup-content { margin: 10px 14px !important; }
+.popup-title { font-family: 'Rajdhani', sans-serif; font-weight: 600; font-size: 13px; color: var(--amber); margin-bottom: 4px; }
+.popup-row { display: flex; gap: 8px; margin: 2px 0; }
+.popup-key { color: var(--text-dim); min-width: 70px; }
+.popup-val { color: var(--ice); }
+
+/* ── AOI controls ── */
+#aoi-controls {
+  position: absolute;
+  top: 10px; left: 10px;
+  z-index: 500;
+  display: flex; flex-direction: column; gap: 4px;
+}
+#aoi-draw-btn, #aoi-clear-btn {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 10px;
+  background: rgba(8,11,15,0.9);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 1px;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+#aoi-draw-btn:hover, #aoi-clear-btn:hover { border-color: var(--border2); color: var(--text); }
+#aoi-draw-btn.active { border-color: var(--amber-dim); color: var(--amber); background: var(--amber-glow); }
+#aoi-clear-btn { display: none; }
+#aoi-clear-btn.visible { display: flex; }
+#aoi-clear-btn:hover { border-color: var(--red-dim); color: var(--red); }
+#aoi-status {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 8px;
+  color: var(--ice);
+  padding: 2px 10px;
+  display: none;
+}
+#aoi-status.visible { display: block; }
+
+/* Hide leaflet-draw's default toolbar — we use our own buttons */
+.leaflet-draw { display: none !important; }
+
+/* Style the AOI rectangle on the map */
+.aoi-rectangle { stroke: var(--amber); fill: var(--amber-glow); }
+
+/* ── Leaflet overrides ── */
+.leaflet-control-zoom { display: none; }
+
+/* ── Misc animations ── */
+@keyframes fadeIn { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:none} }
+.fade-in { animation: fadeIn 0.3s ease forwards; }
+
+/* ── Scrollbars ── */
+* { scrollbar-width: thin; scrollbar-color: var(--border2) transparent; }
+
+/* ── Loading overlay ── */
+#loading {
+  position: fixed; inset: 0; z-index: 10000;
+  background: var(--bg);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 20px;
+  transition: opacity 0.6s;
+}
+#loading.hidden { opacity: 0; pointer-events: none; }
+.load-logo { font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 36px; letter-spacing: 10px; color: var(--amber); }
+.load-sub  { font-family: 'Share Tech Mono', monospace; font-size: 11px; color: var(--text-dim); letter-spacing: 3px; }
+.load-bar  { width: 200px; height: 1px; background: var(--border); position: relative; overflow: hidden; }
+.load-bar::after { content: ''; position: absolute; inset: 0; background: var(--amber); animation: load-fill 2s ease forwards; }
+@keyframes load-fill { from{transform:scaleX(0);transform-origin:left} to{transform:scaleX(1);transform-origin:left} }
+</style>
+</head>
+<body>
+
+<!-- Loading overlay -->
+<div id="loading">
+  <div class="load-logo">SENTINEL</div>
+  <div class="load-sub">INITIALIZING INTELLIGENCE FEEDS</div>
+  <div class="load-bar"></div>
+  <div id="load-status" style="font-family:'Share Tech Mono',monospace;font-size:9px;color:var(--text-dim);margin-top:8px;">Connecting to server...</div>
+</div>
+
+<div id="app">
+
+  <!-- ══ HEADER ══ -->
+  <header id="header">
+    <div class="logo">SENTI<span>NEL</span></div>
+
+    <div class="header-center">
+      <span><span class="status-dot" id="conn-dot"></span><span id="conn-label">CONNECTING</span></span>
+      <span>SWEEP <span id="sweep-count" style="color:var(--ice)">—</span></span>
+      <span>NEXT <span id="next-sweep" style="color:var(--ice)">—</span></span>
+      <span id="last-sweep" style="color:var(--text-dim)">—</span>
+    </div>
+
+    <div class="header-right">
+      <div id="clock">—</div>
+      <button id="sweep-btn" onclick="forceSweep()">⟳ SWEEP</button>
+    </div>
+  </header>
+
+  <!-- ══ LEFT PANEL ══ -->
+  <div id="left-panel">
+
+    <!-- Source health -->
+    <div class="panel-section" style="flex-shrink:0">
+      <div class="panel-header" onclick="toggleSection('sources-body')">
+        <span class="panel-title">Source Integrity</span>
+        <span class="panel-badge" id="sources-badge">9 FEEDS</span>
+      </div>
+      <div class="panel-body" id="sources-body" style="max-height:160px">
+        <div id="sources-list"><div class="source-row"><span class="source-name">Awaiting sweep...</span></div></div>
+      </div>
+    </div>
+
+    <!-- Sweep delta -->
+    <div class="panel-section" style="flex-shrink:0">
+      <div class="panel-header" onclick="toggleSection('delta-body')">
+        <span class="panel-title">Sweep Delta</span>
+        <span class="panel-badge" id="delta-badge">—</span>
+      </div>
+      <div class="panel-body" id="delta-body" style="max-height:140px">
+        <div id="delta-list"><div class="delta-row"><span class="delta-key">Awaiting first sweep...</span></div></div>
+      </div>
+    </div>
+
+    <!-- Satellites -->
+    <div class="panel-section" style="flex-shrink:0">
+      <div class="panel-header" onclick="toggleSection('sat-body')">
+        <span class="panel-title">Space Watch</span>
+        <span class="panel-badge" id="sat-badge">—</span>
+      </div>
+      <div class="panel-body" id="sat-body" style="max-height:130px">
+        <div id="sat-list"><div class="sat-row"><span class="sat-name">—</span></div></div>
+      </div>
+    </div>
+
+    <!-- Humanitarian alerts -->
+    <div class="panel-section flex-grow">
+      <div class="panel-header" onclick="toggleSection('relief-body')">
+        <span class="panel-title">Humanitarian</span>
+        <span class="panel-badge alert" id="relief-badge">—</span>
+      </div>
+      <div class="panel-body" id="relief-body">
+        <div id="relief-list"><div class="relief-row"><span class="relief-meta">Awaiting sweep...</span></div></div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ══ MAP ══ -->
+  <div id="map-container">
+    <div id="sweep-progress"><div id="sweep-bar"></div></div>
+    <div id="map"></div>
+
+    <!-- AOI controls -->
+    <div id="aoi-controls">
+      <button id="aoi-draw-btn" onclick="startAoiDraw()">⬒ DRAW AOI</button>
+      <button id="aoi-clear-btn" onclick="clearAoi()">✕ CLEAR AOI</button>
+      <div id="aoi-status"></div>
+    </div>
+
+    <!-- Layer toggles -->
+    <div id="layer-toggles">
+      <button class="layer-btn active" id="btn-conflicts" onclick="toggleLayer('conflicts')">
+        <span class="layer-dot" style="background:#ef4444"></span>CONFLICTS
+      </button>
+      <button class="layer-btn active" id="btn-fires" onclick="toggleLayer('fires')">
+        <span class="layer-dot" style="background:#f97316"></span>FIRES
+      </button>
+      <button class="layer-btn active" id="btn-flights" onclick="toggleLayer('flights')">
+        <span class="layer-dot" style="background:#7ecfea"></span>FLIGHTS
+      </button>
+      <button class="layer-btn active" id="btn-radiation" onclick="toggleLayer('radiation')">
+        <span class="layer-dot" style="background:#a855f7"></span>RADIATION
+      </button>
+      <button class="layer-btn active" id="btn-events" onclick="toggleLayer('events')">
+        <span class="layer-dot" style="background:#e8a020"></span>EVENTS
+      </button>
+    </div>
+
+    <!-- Region filters -->
+    <div id="region-filters">
+      <button class="region-btn active" onclick="flyTo('world')">WORLD</button>
+      <button class="region-btn" onclick="flyTo('americas')">AMER</button>
+      <button class="region-btn" onclick="flyTo('europe')">EUR</button>
+      <button class="region-btn" onclick="flyTo('mideast')">ME</button>
+      <button class="region-btn" onclick="flyTo('asia')">ASIA</button>
+      <button class="region-btn" onclick="flyTo('africa')">AFR</button>
+    </div>
+
+    <!-- Map info -->
+    <div id="map-info">DRAG TO PAN  ·  SCROLL TO ZOOM  ·  CLICK MARKERS FOR DETAIL</div>
+  </div>
+
+  <!-- ══ RIGHT PANEL ══ -->
+  <div id="right-panel">
+
+    <!-- Risk gauge -->
+    <div class="panel-section" style="flex-shrink:0">
+      <div class="panel-header">
+        <span class="panel-title">Market Risk</span>
+        <span class="panel-badge" id="risk-badge">—</span>
+      </div>
+      <div class="risk-gauge" id="vix-gauge">
+        <span class="risk-label">VIX</span>
+        <div class="risk-bar-wrap"><div class="risk-bar" style="width:0%"></div></div>
+        <span class="risk-val" id="vix-val">—</span>
+      </div>
+    </div>
+
+    <!-- Markets -->
+    <div class="panel-section" style="flex-shrink:0">
+      <div class="panel-header" onclick="toggleSection('markets-body')">
+        <span class="panel-title">Live Markets</span>
+        <span class="panel-badge" id="markets-badge">—</span>
+      </div>
+      <div class="panel-body" id="markets-body" style="max-height:220px">
+        <div id="markets-list"><div class="market-row" style="color:var(--text-dim)">Awaiting data...</div></div>
+      </div>
+    </div>
+
+    <!-- Economic indicators -->
+    <div class="panel-section" style="flex-shrink:0">
+      <div class="panel-header" onclick="toggleSection('econ-body')">
+        <span class="panel-title">Economic Indicators</span>
+        <span class="panel-badge" id="econ-badge">FRED</span>
+      </div>
+      <div class="panel-body" id="econ-body" style="max-height:140px">
+        <div id="econ-list"><div class="market-row" style="color:var(--text-dim)">Awaiting data...</div></div>
+      </div>
+    </div>
+
+    <!-- News feed -->
+    <div class="panel-section flex-grow">
+      <div class="panel-header" onclick="toggleSection('news-body')">
+        <span class="panel-title">Intelligence Feed</span>
+        <span class="panel-badge" id="news-badge">—</span>
+      </div>
+      <div class="panel-body" id="news-body">
+        <div id="news-list"><div class="event-row"><span class="ev-meta">Awaiting sweep...</span></div></div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ══ FOOTER ══ -->
+  <footer id="footer">
+    <div class="footer-tickers" id="footer-tickers">
+      <span style="color:var(--text-dim)">Loading market data...</span>
+    </div>
+    <div style="flex-shrink:0;margin-left:20px;color:var(--text-dim)">
+      SENTINEL v1.0 · PERSONAL USE ONLY · ALL DATA FROM PUBLIC SOURCES
+    </div>
+  </footer>
+
+</div><!-- /app -->
+
+<script>
+// ════════════════════════════════════════════════════════
+//  SENTINEL — Dashboard Logic
+// ════════════════════════════════════════════════════════
+
+const state = {
+  data: {},
+  layers: { conflicts:true, fires:true, flights:true, radiation:true, events:true },
+  map: null,
+  markers: { conflicts:[], fires:[], flights:[], radiation:[], events:[] },
+  sweepInterval: 900,
+  lastSweepTime: null,
+  nextSweepTimer: null,
+};
+
+// ── Clock ─────────────────────────────────────────────
+function updateClock() {
+  const now = new Date();
+  document.getElementById('clock').textContent =
+    now.toUTCString().replace('GMT','').replace(/,\s\d+ \w+ \d+\s/,' ') + 'Z';
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+// ── Countdown ─────────────────────────────────────────
+function startCountdown(secondsFromNow) {
+  if (state.nextSweepTimer) clearInterval(state.nextSweepTimer);
+  let remaining = secondsFromNow;
+  function tick() {
+    if (remaining <= 0) { document.getElementById('next-sweep').textContent = 'NOW'; return; }
+    const m = Math.floor(remaining / 60);
+    const s = remaining % 60;
+    document.getElementById('next-sweep').textContent = `${m}:${s.toString().padStart(2,'0')}`;
+    remaining--;
+  }
+  tick();
+  state.nextSweepTimer = setInterval(tick, 1000);
+}
+
+// ── Init Leaflet map ──────────────────────────────────
+function initMap() {
+  state.map = L.map('map', {
+    center: [20, 10],
+    zoom: 2,
+    zoomControl: false,
+    attributionControl: false,
+    minZoom: 1,
+    maxZoom: 9,
+  });
+
+  // Dark cartographic tile layer
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    subdomains: 'abcd',
+    maxZoom: 19,
+  }).addTo(state.map);
+
+  // Subtle graticule lines (equator/tropic reference)
+  const lines = [
+    [[0,-180],[0,180]],       // equator
+    [[23.5,-180],[23.5,180]], // tropic cancer
+    [[-23.5,-180],[-23.5,180]],
+    [[66.5,-180],[66.5,180]], // arctic
+  ];
+  lines.forEach(pts => {
+    L.polyline(pts, { color:'rgba(30,45,61,0.6)', weight:0.5, interactive:false }).addTo(state.map);
+  });
+}
+
+// ── Map marker helpers ────────────────────────────────
+function clearLayer(name) {
+  state.markers[name].forEach(m => state.map.removeLayer(m));
+  state.markers[name] = [];
+}
+
+function makeIcon(color, size=8, shape='circle') {
+  const html = shape === 'plane'
+    ? `<div style="color:${color};font-size:${size+4}px;line-height:1;transform:rotate(var(--hdg))">✈</div>`
+    : `<div style="width:${size}px;height:${size}px;border-radius:50%;background:${color};box-shadow:0 0 ${size}px ${color}44;border:1px solid ${color}88"></div>`;
+  return L.divIcon({ html, className:'', iconSize:[size+4,size+4], iconAnchor:[(size+4)/2,(size+4)/2] });
+}
+
+// ── Render conflicts ──────────────────────────────────
+function renderConflicts(data) {
+  clearLayer('conflicts');
+  if (!data?.conflicts) return;
+  if (!state.layers.conflicts) return;
+
+  data.conflicts.forEach(c => {
+    if (!c.lat || !c.lon) return;
+    const color = c.color || '#ef4444';
+    const size  = c.fatalities > 50 ? 14 : c.fatalities > 10 ? 10 : 7;
+    const icon  = makeIcon(color, size);
+    const m = L.marker([c.lat, c.lon], { icon })
+      .bindPopup(`
+        <div class="popup-title">${c.type || 'Conflict Event'}</div>
+        <div class="popup-row"><span class="popup-key">Country</span><span class="popup-val">${c.country||'—'}</span></div>
+        <div class="popup-row"><span class="popup-key">Actor</span><span class="popup-val">${c.actor||'—'}</span></div>
+        <div class="popup-row"><span class="popup-key">Fatalities</span><span class="popup-val" style="color:var(--red)">${c.fatalities??'—'}</span></div>
+        <div class="popup-row"><span class="popup-key">Date</span><span class="popup-val">${c.date||'—'}</span></div>
+        <div style="margin-top:6px;font-size:9px;color:var(--text-dim);line-height:1.5">${c.notes||''}</div>
+      `)
+      .addTo(state.map);
+    state.markers.conflicts.push(m);
+  });
+}
+
+// ── Render fires ──────────────────────────────────────
+function renderFires(data) {
+  clearLayer('fires');
+  if (!data?.fires) return;
+  if (!state.layers.fires) return;
+
+  // Bin fires by region to avoid overcrowding — show top 300
+  data.fires.slice(0,300).forEach(f => {
+    const intensity = Math.min(f.frp / 100, 1);
+    const color = `hsl(${30 - intensity*25}, 100%, ${55 + intensity*15}%)`;
+    const size  = Math.max(3, Math.min(10, 3 + f.frp / 80));
+    const icon  = makeIcon(color, size);
+    const m = L.marker([f.lat, f.lon], { icon })
+      .bindPopup(`
+        <div class="popup-title">🔥 Fire Hotspot</div>
+        <div class="popup-row"><span class="popup-key">FRP</span><span class="popup-val">${f.frp} MW</span></div>
+        <div class="popup-row"><span class="popup-key">Confidence</span><span class="popup-val">${f.confidence}</span></div>
+        <div class="popup-row"><span class="popup-key">Satellite</span><span class="popup-val">${f.satellite}</span></div>
+        <div class="popup-row"><span class="popup-key">Detected</span><span class="popup-val">${f.acq_date} ${f.acq_time}</span></div>
+      `)
+      .addTo(state.map);
+    state.markers.fires.push(m);
+  });
+}
+
+// ── Render flights ────────────────────────────────────
+function renderFlights(data) {
+  clearLayer('flights');
+  if (!data?.flights) return;
+  if (!state.layers.flights) return;
+
+  data.flights.forEach(f => {
+    const color = f.emergency ? '#ef4444' : f.military ? '#e8a020' : 'rgba(126,207,234,0.7)';
+    const size  = f.military || f.emergency ? 10 : 6;
+    const iconHtml = `<div style="color:${color};font-size:${size+4}px;line-height:1;transform:rotate(${f.heading}deg)">✈</div>`;
+    const icon = L.divIcon({ html:iconHtml, className:'', iconSize:[18,18], iconAnchor:[9,9] });
+    const m = L.marker([f.lat, f.lon], { icon })
+      .bindPopup(`
+        <div class="popup-title">${f.military?'⚠ MILITARY — ':f.emergency?'🚨 EMERGENCY — ':''}${f.callsign||f.icao}</div>
+        <div class="popup-row"><span class="popup-key">ICAO</span><span class="popup-val">${f.icao}</span></div>
+        <div class="popup-row"><span class="popup-key">Country</span><span class="popup-val">${f.country}</span></div>
+        <div class="popup-row"><span class="popup-key">Altitude</span><span class="popup-val">${f.alt_ft?.toLocaleString()} ft</span></div>
+        <div class="popup-row"><span class="popup-key">Speed</span><span class="popup-val">${f.speed_kts} kts</span></div>
+        <div class="popup-row"><span class="popup-key">Squawk</span><span class="popup-val">${f.squawk||'—'}</span></div>
+      `)
+      .addTo(state.map);
+    state.markers.flights.push(m);
+  });
+}
+
+// ── Render radiation ──────────────────────────────────
+function renderRadiation(data) {
+  clearLayer('radiation');
+  if (!data?.readings) return;
+  if (!state.layers.radiation) return;
+
+  const colorMap = { high:'#ef4444', elevated:'#f97316', slightly_elevated:'#a855f7', normal:'rgba(168,85,247,0.3)' };
+  const sizeMap  = { high:12, elevated:9, slightly_elevated:6, normal:3 };
+
+  data.readings.slice(0,200).forEach(r => {
+    if (!r.lat || !r.lon) return;
+    const color = colorMap[r.level] || '#a855f7';
+    const size  = sizeMap[r.level]  || 3;
+    const icon  = makeIcon(color, size);
+    const m = L.marker([r.lat, r.lon], { icon })
+      .bindPopup(`
+        <div class="popup-title">☢ Radiation Reading</div>
+        <div class="popup-row"><span class="popup-key">Level</span><span class="popup-val" style="color:${color}">${r.level.replace('_',' ').toUpperCase()}</span></div>
+        <div class="popup-row"><span class="popup-key">μSv/h</span><span class="popup-val">${r.usv}</span></div>
+        <div class="popup-row"><span class="popup-key">Device</span><span class="popup-val">${r.device_id}</span></div>
+        <div class="popup-row"><span class="popup-key">Time</span><span class="popup-val">${r.captured_at?.slice(0,19)||'—'}</span></div>
+      `)
+      .addTo(state.map);
+    state.markers.radiation.push(m);
+  });
+}
+
+// ── Render news events on map ─────────────────────────
+function renderEvents(data) {
+  clearLayer('events');
+  if (!data?.events) return;
+  if (!state.layers.events) return;
+
+  data.events.filter(e => e.lat && e.lon).slice(0,100).forEach(e => {
+    const color = '#e8a020';
+    const icon  = makeIcon(color, 5);
+    const ts = e.timestamp ? new Date(e.timestamp) : null;
+    const timeStr = ts ? ts.toUTCString().slice(5,22) : '—';
+    const m = L.marker([e.lat, e.lon], { icon })
+      .bindPopup(`
+        <div class="popup-title" style="font-size:11px;max-width:260px">${e.title}</div>
+        <div class="popup-row"><span class="popup-key">Source</span><span class="popup-val">${e.source}</span></div>
+        <div class="popup-row"><span class="popup-key">Date</span><span class="popup-val">${timeStr}</span></div>
+        ${e.url?`<div style="margin-top:6px"><a href="${e.url}" target="_blank" style="color:var(--ice);font-size:9px">OPEN ARTICLE →</a></div>`:''}
+      `)
+      .addTo(state.map);
+    state.markers.events.push(m);
+  });
+}
+
+// ── Toggle layer ──────────────────────────────────────
+function toggleLayer(name) {
+  state.layers[name] = !state.layers[name];
+  const btn = document.getElementById(`btn-${name}`);
+  btn.classList.toggle('active', state.layers[name]);
+
+  if (state.layers[name]) {
+    // Re-render
+    if (name === 'conflicts') renderConflicts(state.data.acled);
+    if (name === 'fires')     renderFires(state.data.firms);
+    if (name === 'flights')   renderFlights(state.data.opensky);
+    if (name === 'radiation') renderRadiation(state.data.safecast);
+    if (name === 'events')    renderEvents(state.data.rss);
+  } else {
+    clearLayer(name);
+  }
+}
+
+// ── Toggle section collapse ───────────────────────────
+function toggleSection(id) {
+  const el = document.getElementById(id);
+  el.style.display = el.style.display === 'none' ? '' : 'none';
+}
+
+// ── Render source health ──────────────────────────────
+function renderSources(meta) {
+  if (!meta?.source_health) return;
+  const list = document.getElementById('sources-list');
+  const labels = {
+    rss:'RSS News', firms:'NASA FIRMS', opensky:'OpenSky', acled:'ACLED',
+    safecast:'Safecast', celestrak:'CelesTrak', yahoo:'Yahoo Finance', fred:'FRED', reliefweb:'ReliefWeb'
+  };
+  list.innerHTML = Object.entries(meta.source_health).map(([k, v]) => {
+    const ok   = v.status === 'ok';
+    const cls  = ok ? 'source-ok' : 'source-err';
+    const icon = ok ? '●' : '✗';
+    const count = v.count !== undefined ? `${v.count} records` : (v.error||'error').slice(0,30);
+    return `<div class="source-row">
+      <span class="source-name">${labels[k]||k}</span>
+      <span class="${cls}">${icon} ${ok ? count : 'ERR'}</span>
+    </div>`;
+  }).join('');
+}
+
+// ── Render delta ──────────────────────────────────────
+function renderDelta(delta) {
+  if (!delta) return;
+  const labels = {
+    rss:'News', firms:'Fires', opensky:'Flights', acled:'Conflicts',
+    safecast:'Readings', celestrak:'Sats', yahoo:'Tickers', fred:'Indicators', reliefweb:'Alerts'
+  };
+  const list = document.getElementById('delta-list');
+  list.innerHTML = Object.entries(delta).map(([k, v]) => {
+    const chg = v.change;
+    const cls = chg > 0 ? 'delta-up' : chg < 0 ? 'delta-dn' : 'delta-same';
+    const arrow = chg > 0 ? '▲' : chg < 0 ? '▼' : '—';
+    return `<div class="delta-row">
+      <span class="delta-key">${labels[k]||k}</span>
+      <span class="${cls}">${arrow} ${Math.abs(chg)} (${v.now})</span>
+    </div>`;
+  }).join('');
+  document.getElementById('delta-badge').textContent = `ΔSWEEP`;
+}
+
+// ── Render satellites ──────────────────────────────────
+function renderSatellites(data) {
+  if (!data?.satellites) return;
+  const list = document.getElementById('sat-list');
+  list.innerHTML = data.satellites.map(s => {
+    const cls = s.type === 'military' ? 'sat-type-military' : 'sat-count';
+    return `<div class="sat-row">
+      <span class="sat-name">${s.name}</span>
+      <span class="${cls}">${s.count.toLocaleString()}</span>
+    </div>`;
+  }).join('');
+  document.getElementById('sat-badge').textContent = `${(data.total_tracked||0).toLocaleString()} TRACKED`;
+}
+
+// ── Render relief ──────────────────────────────────────
+function renderRelief(data) {
+  if (!data) return;
+  const alerts  = data.alerts  || [];
+  const reports = data.reports || [];
+  const list = document.getElementById('relief-list');
+
+  let html = alerts.slice(0,10).map(a => {
+    const cls = a.status === 'alert' ? 'relief-alert' : 'relief-ongoing';
+    return `<div class="relief-row">
+      <div class="relief-name">${a.name||'—'}</div>
+      <div class="relief-meta">
+        <span class="${cls}">${(a.status||'').toUpperCase()}</span>
+        &nbsp;·&nbsp;${a.type||''}
+        &nbsp;·&nbsp;${(a.countries||[]).join(', ')}
+      </div>
+    </div>`;
+  }).join('');
+
+  if (reports.length) {
+    html += `<div class="market-group-label">SITUATION REPORTS</div>`;
+    html += reports.slice(0,5).map(r => `<div class="relief-row">
+      <div class="relief-name" style="font-size:10px">${r.title||'—'}</div>
+      <div class="relief-meta">${(r.countries||[]).join(', ')} · ${r.date?.slice(0,10)||''}</div>
+    </div>`).join('');
+  }
+
+  list.innerHTML = html || '<div class="relief-row"><span class="relief-meta">No active alerts</span></div>';
+  document.getElementById('relief-badge').textContent = `${alerts.length} ALERTS`;
+}
+
+// ── Render markets ────────────────────────────────────
+function renderMarkets(data) {
+  if (!data?.markets) return;
+
+  const vix = data.vix;
+  const rl  = data.risk_level || 'LOW';
+  const vixPct = vix ? Math.min(vix / 50 * 100, 100) : 0;
+
+  document.getElementById('vix-gauge').className = `risk-gauge risk-${rl}`;
+  document.getElementById('vix-val').textContent  = vix ? vix.toFixed(1) : '—';
+  document.querySelector('#vix-gauge .risk-bar').style.width = `${vixPct}%`;
+  document.getElementById('risk-badge').textContent = rl;
+
+  const catLabels = { indices:'INDICES', crypto:'CRYPTO', energy:'ENERGY', commodities:'COMMODITIES', fx:'FX' };
+  const list = document.getElementById('markets-list');
+  let html = '';
+
+  for (const [cat, items] of Object.entries(data.markets)) {
+    if (!items.length) continue;
+    html += `<div class="market-group-label">${catLabels[cat]||cat}</div>`;
+    html += items.map(m => {
+      const up  = m.change_pct >= 0;
+      const cls = up ? 'm-up' : 'm-dn';
+      const arr = up ? '▲' : '▼';
+      return `<div class="market-row">
+        <span class="m-label">${m.label}</span>
+        <span class="m-price">${formatPrice(m.price, m.currency)}</span>
+        <span class="m-chg ${cls}">${arr}${Math.abs(m.change_pct).toFixed(2)}%</span>
+      </div>`;
+    }).join('');
+  }
+
+  list.innerHTML = html || '<div class="market-row" style="color:var(--text-dim)">No data</div>';
+
+  // Footer ticker
+  const allItems = Object.values(data.markets).flat().slice(0,10);
+  document.getElementById('footer-tickers').innerHTML = allItems.map(m => {
+    const up = m.change_pct >= 0;
+    return `<span class="ticker-item">
+      ${m.symbol} <span class="val">${formatPrice(m.price)}</span>
+      <span class="${up?'up':'dn'}">${up?'▲':'▼'}${Math.abs(m.change_pct||0).toFixed(2)}%</span>
+    </span>`;
+  }).join('');
+
+  const count = Object.values(data.markets).flat().length;
+  document.getElementById('markets-badge').textContent = `${count} INSTRUMENTS`;
+}
+
+function formatPrice(p, currency) {
+  if (!p && p !== 0) return '—';
+  if (p > 10000) return p.toLocaleString('en', {maximumFractionDigits:0});
+  if (p > 100)   return p.toLocaleString('en', {maximumFractionDigits:2});
+  return p.toFixed(4);
+}
+
+// ── Render FRED ────────────────────────────────────────
+function renderFred(data) {
+  const list = document.getElementById('econ-list');
+  if (data?.note) {
+    list.innerHTML = `<div class="market-row" style="color:var(--text-dim);font-size:9px">${data.note}</div>`;
+    return;
+  }
+  if (!data?.indicators?.length) {
+    list.innerHTML = `<div class="market-row" style="color:var(--text-dim)">No FRED key configured</div>`;
+    return;
+  }
+  list.innerHTML = data.indicators.map(ind => {
+    if (ind.error) return `<div class="market-row"><span class="m-label">${ind.label}</span><span style="color:var(--red);font-size:9px">ERR</span></div>`;
+    const up  = (ind.change||0) >= 0;
+    const cls = up ? 'm-up' : 'm-dn';
+    const arr = up ? '▲' : '▼';
+    return `<div class="market-row">
+      <span class="m-label">${ind.label}</span>
+      <span class="m-price">${ind.value?.toFixed(2)??'—'}</span>
+      ${ind.change!==null?`<span class="m-chg ${cls}">${arr}${Math.abs(ind.change).toFixed(2)}</span>`:''}
+    </div>`;
+  }).join('');
+  document.getElementById('econ-badge').textContent = `${data.indicators.length} SERIES`;
+}
+
+// ── Render news feed ──────────────────────────────────
+function renderNews(data) {
+  if (!data?.events) return;
+  const items = data.events.slice(0, 80);
+  const list  = document.getElementById('news-list');
+  list.innerHTML = items.map(e => {
+    const ts = e.timestamp ? new Date(e.timestamp) : null;
+    const timeStr = ts ? ts.toUTCString().slice(5,22) : '';
+    return `<div class="event-row" onclick="window.open('${e.url||'#'}','_blank')">
+      <div class="ev-title">${e.title||'—'}</div>
+      <div class="ev-meta">
+        <span>${e.source||'—'}</span>
+        <span>${timeStr}</span>
+      </div>
+    </div>`;
+  }).join('');
+  document.getElementById('news-badge').textContent = `${items.length} ITEMS`;
+}
+
+// ── Full render from sweep data ───────────────────────
+function renderAll(data) {
+  state.data = data;
+
+  const meta = data._meta;
+  if (meta) {
+    document.getElementById('sweep-count').textContent = meta.sweep_count;
+    document.getElementById('last-sweep').textContent = `LAST: ${meta.timestamp?.slice(11,19)||'—'} UTC`;
+    renderSources(meta);
+    startCountdown(meta.sweep_interval_s || 900);
+  }
+
+  renderDelta(data._delta);
+  renderConflicts(data.acled);
+  renderFires(data.firms);
+  renderFlights(data.opensky);
+  renderRadiation(data.safecast);
+  renderEvents(data.rss);
+  renderSatellites(data.celestrak);
+  renderRelief(data.reliefweb);
+  renderMarkets(data.yahoo);
+  renderFred(data.fred);
+  renderNews(data.rss);
+
+  // Hide loading screen
+  const loading = document.getElementById('loading');
+  loading.classList.add('hidden');
+  setTimeout(() => loading.remove(), 700);
+}
+
+// ── Region fly-to ──────────────────────────────────────
+const REGIONS = {
+  world:    { center: [20, 10],   zoom: 2 },
+  americas: { center: [5, -80],   zoom: 3 },
+  europe:   { center: [52, 15],   zoom: 4 },
+  mideast:  { center: [28, 42],   zoom: 4 },
+  asia:     { center: [25, 100],  zoom: 3 },
+  africa:   { center: [5, 20],    zoom: 3 },
+};
+
+function flyTo(region) {
+  const r = REGIONS[region];
+  if (!r) return;
+  state.map.flyTo(r.center, r.zoom, { duration: 1.2 });
+  document.querySelectorAll('.region-btn').forEach(b => b.classList.remove('active'));
+  const btn = document.querySelector(`.region-btn[onclick="flyTo('${region}')"]`);
+  if (btn) btn.classList.add('active');
+}
+
+// ── SSE connection (with exponential backoff) ──────────
+let _sseRetryDelay = 2000;
+
+function connectSSE() {
+  const dot      = document.getElementById('conn-dot');
+  const label    = document.getElementById('conn-label');
+  const progress = document.getElementById('sweep-progress');
+  const loadSt   = document.getElementById('load-status');
+
+  const es = new EventSource('/stream');
+
+  es.onopen = () => {
+    dot.className      = 'status-dot';
+    label.textContent  = 'LIVE';
+    _sseRetryDelay     = 2000;   // reset backoff on success
+    if (loadSt) loadSt.textContent = 'Connected — waiting for first sweep (~30s)...';
+  };
+
+  es.addEventListener('sweep', e => {
+    try {
+      const data = JSON.parse(e.data);
+      progress.classList.remove('active');
+      renderAll(data);
+    } catch(err) {
+      console.error('SSE parse error:', err);
+    }
+  });
+
+  es.onerror = () => {
+    dot.className      = 'status-dot error';
+    label.textContent  = `RETRY ${Math.round(_sseRetryDelay/1000)}s`;
+    es.close();
+    setTimeout(() => {
+      _sseRetryDelay = Math.min(_sseRetryDelay * 1.5, 30000);  // cap at 30s
+      connectSSE();
+    }, _sseRetryDelay);
+  };
+}
+
+// ── Force sweep ───────────────────────────────────────
+async function forceSweep() {
+  const btn = document.getElementById('sweep-btn');
+  const progress = document.getElementById('sweep-progress');
+  btn.disabled = true;
+  btn.textContent = '⟳ SWEEPING';
+  progress.classList.add('active');
+
+  try {
+    await fetch('/api/sweep', { method: 'POST' });
+  } catch(e) { }
+
+  setTimeout(() => {
+    btn.disabled = false;
+    btn.textContent = '⟳ SWEEP';
+  }, 10000);
+}
+
+// ── AOI drawing ──────────────────────────────────────
+let _aoiLayer = null;       // L.Rectangle on map
+let _aoiDrawer = null;      // Leaflet.draw handler
+let _aoiDrawing = false;
+
+function startAoiDraw() {
+  if (_aoiDrawing) { cancelAoiDraw(); return; }
+  _aoiDrawing = true;
+  document.getElementById('aoi-draw-btn').classList.add('active');
+  document.getElementById('aoi-draw-btn').textContent = '⬒ DRAWING…';
+  document.getElementById('map-info').textContent = 'CLICK AND DRAG TO DRAW AOI RECTANGLE';
+
+  _aoiDrawer = new L.Draw.Rectangle(state.map, {
+    shapeOptions: { color: '#e8a020', weight: 2, fillOpacity: 0.08, dashArray: '6,4' }
+  });
+  _aoiDrawer.enable();
+}
+
+function cancelAoiDraw() {
+  _aoiDrawing = false;
+  document.getElementById('aoi-draw-btn').classList.remove('active');
+  document.getElementById('aoi-draw-btn').textContent = '⬒ DRAW AOI';
+  document.getElementById('map-info').textContent = 'DRAG TO PAN  ·  SCROLL TO ZOOM  ·  CLICK MARKERS FOR DETAIL';
+  if (_aoiDrawer) { _aoiDrawer.disable(); _aoiDrawer = null; }
+}
+
+function showAoiStatus(bbox) {
+  const parts = bbox.split(',').map(Number);
+  const txt = `AOI: ${parts[1].toFixed(1)}°–${parts[3].toFixed(1)}°N  ${parts[0].toFixed(1)}°–${parts[2].toFixed(1)}°E`;
+  const el = document.getElementById('aoi-status');
+  el.textContent = txt;
+  el.classList.add('visible');
+  document.getElementById('aoi-clear-btn').classList.add('visible');
+}
+
+async function setAoi(bounds) {
+  const w = bounds.getWest().toFixed(4);
+  const s = bounds.getSouth().toFixed(4);
+  const e = bounds.getEast().toFixed(4);
+  const n = bounds.getNorth().toFixed(4);
+  const bbox = `${w},${s},${e},${n}`;
+
+  try {
+    const r = await fetch('/api/aoi', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bbox })
+    });
+    if (r.ok) {
+      showAoiStatus(bbox);
+    }
+  } catch(err) {
+    console.error('Failed to set AOI:', err);
+  }
+}
+
+async function clearAoi() {
+  // Remove rectangle from map
+  if (_aoiLayer) { state.map.removeLayer(_aoiLayer); _aoiLayer = null; }
+
+  document.getElementById('aoi-status').classList.remove('visible');
+  document.getElementById('aoi-clear-btn').classList.remove('visible');
+
+  try {
+    await fetch('/api/aoi', { method: 'DELETE' });
+  } catch(err) {
+    console.error('Failed to clear AOI:', err);
+  }
+}
+
+function initAoiDraw() {
+  // Listen for rectangle creation
+  state.map.on(L.Draw.Event.CREATED, function(e) {
+    // Remove old AOI rectangle
+    if (_aoiLayer) state.map.removeLayer(_aoiLayer);
+
+    _aoiLayer = e.layer;
+    _aoiLayer.setStyle({ color: '#e8a020', weight: 2, fillOpacity: 0.08, dashArray: '6,4' });
+    state.map.addLayer(_aoiLayer);
+
+    setAoi(_aoiLayer.getBounds());
+    cancelAoiDraw();
+  });
+
+  // Load existing AOI from server on boot
+  fetch('/api/aoi')
+    .then(r => r.json())
+    .then(data => {
+      if (data.bbox) {
+        const [w, s, e, n] = data.bbox.split(',').map(Number);
+        _aoiLayer = L.rectangle([[s, w], [n, e]], {
+          color: '#e8a020', weight: 2, fillOpacity: 0.08, dashArray: '6,4'
+        }).addTo(state.map);
+        showAoiStatus(data.bbox);
+      }
+    })
+    .catch(() => {});
+}
+
+// ── Boot ──────────────────────────────────────────────
+initMap();
+initAoiDraw();
+connectSSE();
+
+// Try loading cached data immediately
+fetch('/api/data')
+  .then(r => r.json())
+  .then(data => {
+    if (data._meta) renderAll(data);
+  })
+  .catch(() => {});
+</script>
+</body>
+</html>
